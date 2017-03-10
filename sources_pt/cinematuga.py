@@ -19,7 +19,7 @@
 '''
 
 
-import re,urllib,urllib2,urlparse,xbmc
+import re, urllib, urlparse
 
 from resources.lib.modules import cleantitle
 from resources.lib.modules import client
@@ -31,72 +31,65 @@ class source:
         self.domains = ['cinematuga.rocks']
         
         self.base_link = 'http://cinematuga.rocks'
-        self.search_link = '/?s='
+        self.search_link = '/?s=%s&submit=Search'
 
     def movie(self, imdb, title, localtitle, year):
         try:
-            query = self.base_link+self.search_link+str(title.replace(' ','+'))+'&submit=Search'
+            query = self.search_link % (urllib.quote_plus(cleantitle.query(title)))
+            query = urlparse.urljoin(self.base_link, query)
 
             result = client.request(query)
-            result = client.parseDOM(result, 'div', attrs = {'class': 'item'})
+            result = client.parseDOM(result, 'div', attrs={'id': 'content'})
+            result = client.parseDOM(result, 'div', attrs={'class': 'item'})
+            result = [(client.parseDOM(i, 'div', attrs={'class': 'thumb'}), client.parseDOM(i, 'div', attrs={'class': 'imdb'})) for i in result]
+            result = [(client.parseDOM(i[0], 'a', ret='href'), client.parseDOM(i[1], 'a', attrs={'href': '[^\'"]+/%s[^\'"]+' % imdb}, ret='href')) for i in result if len(i[0]) > 0 and len(i[1]) > 0]
+            result = [i[0][0] for i in result if len(i[0]) > 0 and len(i[1]) > 0][0]
 
-            for results in result:
-                try:result_imdb = re.compile('imdb.com/title/(.+?)/"').findall(results)[0]
-                except:result_imdb = 'result_imdb'
-                try:result_url = client.parseDOM(results, 'a', ret='href')[0]
-                except:result_url = 'result_url'
-                if imdb == result_imdb:                                
-                        url = result_url
-                        break
+            url = re.findall('(?://.+?|)(/.+)', result)[0]
+            url = client.replaceHTMLCodes(url)
+            url = url.encode('utf-8')
             return url
         except:
             return
 
 
     def sources(self, url, hostDict, hostprDict):
+        sources = []
+
         try:
-            sources = []
-            
-            if url == None: return sources
+            if url is None:
+                return sources
+
+            url = urlparse.urljoin(self.base_link, url)
 
             result = client.request(url)
-            result = client.parseDOM(result, 'div', attrs = {'class': 'movieplay'})
-            
-            for results in result:
-                
-                host_url = client.parseDOM(results, 'iframe', ret='src')[0]
-                
-                try:
-                    quality = host_url.strip().upper()
-                    if '1080P' in quality: quality = '1080p'
-                    elif 'BRRIP' in quality or 'BDRIP' in quality or 'HDRIP' in quality or '720P' in quality: quality = 'HD'
-                    elif 'SCREENER' in quality: quality = 'SCR'
-                    elif 'CAM' in quality or 'TS' in quality: quality = 'CAM'
-                    else: quality = 'SD'
-                except: quality = 'HD'
-                
-                audio_filme = ''
-                audio = 'en'
-                try:
-                    if 'PT-PT' in host_url.upper() or 'PORTUGU' in host_url.upper():
-                        audio_filme = ' | PT-PT'
-                        audio = 'pt'
-                    else:
-                        audio_filme = ''
-                        audio = 'en'
-                except:
-                    audio_filme = ''
-                    audio = 'en'
-                
-                if 'http' not in host_url: host_url = 'http:'+host_url
-                
-                host = re.findall('([\w]+[.][\w]+)$', urlparse.urlparse(host_url.strip().lower()).netloc)[0]
-                if not host in hostDict: raise Exception()
-                host = client.replaceHTMLCodes(host)
-                host = host.encode('utf-8')
+            result = client.parseDOM(result, 'div', attrs={'id': 'player\d+'})
+            result = [client.parseDOM(i, 'iframe', ret='src') for i in result]
+            result = [i[0] for i in result if i]
 
-                sources.append({'source': host+audio_filme, 'quality': quality, 'language': audio, 'provider': 'Cinematuga', 'url': host_url, 'direct': False, 'debridonly': False})                
-                
+            for host_url in result:
+                host = re.findall('([\w]+[.][\w]+)$', urlparse.urlparse(host_url.strip().lower()).netloc)[0]
+                if not host in hostDict: continue
+
+                fmt = re.sub('(.+)(\.|\(|\[|\s)(\d{4}|S\d*E\d*|S\d*)(\.|\)|\]|\s)', '', host_url.upper())
+                fmt = re.split('\.|\(|\)|\[|\]|\s|\-', fmt)
+                fmt = [i.lower() for i in fmt]
+
+                if '1080p' in fmt: quality = '1080p'
+                elif '720p' in fmt: quality = 'HD'
+                else: quality = 'SD'
+                if any(i in ['dvdscr', 'r5', 'r6'] for i in fmt): quality = 'SCR'
+                elif any(i in ['camrip', 'tsrip', 'hdcam', 'hdts', 'dvdcam', 'dvdts', 'cam', 'telesync', 'ts'] for i in fmt): quality = 'CAM'
+
+                info = []
+                if '3d' in fmt or any(i.endswith('3d') for i in fmt): info.append('3D')
+                if any(i in ['hevc', 'h265', 'x265'] for i in fmt): info.append('HEVC')
+                if not any(i in ['pt-pt', 'portugu'] for i in fmt): info.append('subbed')
+
+                info = ' | '.join(info)
+
+                sources.append({'source': host, 'quality': quality, 'language': 'pt', 'url': host_url, 'info': info, 'direct': False, 'debridonly': False, 'checkquality': True})
+
             return sources
         except:
             return sources
