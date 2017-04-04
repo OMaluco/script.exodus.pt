@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-'''
+"""
     Exodus Add-on
     Copyright (C) 2016 Exodus
 
@@ -16,20 +16,24 @@
 
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
-'''
+"""
 
-
-import re, urllib, urlparse
+import re
+import urllib
+import urlparse
 
 from resources.lib.modules import cleantitle
 from resources.lib.modules import client
+from resources.lib.modules import source_utils
+from resources.lib.modules import dom_parser
+
 
 class source:
     def __init__(self):
         self.priority = 1
         self.language = ['pt']
         self.domains = ['cinematuga.rocks']
-        
+
         self.base_link = 'http://cinematuga.rocks'
         self.search_link = '/?s=%s&submit=Search'
 
@@ -39,63 +43,43 @@ class source:
             query = urlparse.urljoin(self.base_link, query)
 
             result = client.request(query)
-            result = client.parseDOM(result, 'div', attrs={'id': 'content'})
-            result = client.parseDOM(result, 'div', attrs={'class': 'item'})
-            result = [(client.parseDOM(i, 'div', attrs={'class': 'thumb'}), client.parseDOM(i, 'div', attrs={'class': 'imdb'})) for i in result]
-            result = [(client.parseDOM(i[0], 'a', ret='href'), client.parseDOM(i[1], 'a', attrs={'href': '[^\'"]+/%s[^\'"]+' % imdb}, ret='href')) for i in result if len(i[0]) > 0 and len(i[1]) > 0]
-            result = [i[0][0] for i in result if len(i[0]) > 0 and len(i[1]) > 0][0]
+            result = dom_parser.parse_dom(result, 'div', attrs={'id': 'content'})
+            result = dom_parser.parse_dom(result, 'div', attrs={'class': 'item'})
+            result = [(dom_parser.parse_dom(i, 'div', attrs={'class': 'thumb'}), dom_parser.parse_dom(i, 'div', attrs={'class': 'imdb'})) for i in result]
+            result = [(dom_parser.parse_dom(i[0], 'a', req='href'), dom_parser.parse_dom(i[1], 'a', attrs={'href': re.compile('.*/%s.*' % imdb)}, req='href')) for i in result if i[0] and i[1]]
+            result = [i[0][0].attrs['href'] for i in result if i[0] and i[1]][0]
 
-            url = re.findall('(?://.+?|)(/.+)', result)[0]
-            url = client.replaceHTMLCodes(url)
-            url = url.encode('utf-8')
-            return url
+            return source_utils.strip_domain(result)
         except:
             return
-
 
     def sources(self, url, hostDict, hostprDict):
         sources = []
 
         try:
-            if url is None:
+            if not url:
                 return sources
 
             url = urlparse.urljoin(self.base_link, url)
 
             result = client.request(url)
-            result = client.parseDOM(result, 'div', attrs={'id': 'player\d+'})
-            result = [client.parseDOM(i, 'iframe', ret='src') for i in result]
-            result = [i[0] for i in result if i]
+            result = dom_parser.parse_dom(result, 'div', attrs={'id': re.compile('player\d+')})
+            result = dom_parser.parse_dom(result, 'iframe', req='src')
+            result = [i.attrs['src'] for i in result if i]
 
             for host_url in result:
-                host = re.findall('([\w]+[.][\w]+)$', urlparse.urlparse(host_url.strip().lower()).netloc)[0]
-                if not host in hostDict: continue
+                valid, hoster = source_utils.is_host_valid(host_url, hostDict)
+                if not valid: continue
 
-                fmt = re.sub('(.+)(\.|\(|\[|\s)(\d{4}|S\d*E\d*|S\d*)(\.|\)|\]|\s)', '', host_url.upper())
-                fmt = re.split('\.|\(|\)|\[|\]|\s|\-', fmt)
-                fmt = [i.lower() for i in fmt]
-
-                if '1080p' in fmt: quality = '1080p'
-                elif '720p' in fmt: quality = 'HD'
-                else: quality = 'SD'
-                if any(i in ['dvdscr', 'r5', 'r6'] for i in fmt): quality = 'SCR'
-                elif any(i in ['camrip', 'tsrip', 'hdcam', 'hdts', 'dvdcam', 'dvdts', 'cam', 'telesync', 'ts'] for i in fmt): quality = 'CAM'
-
-                info = []
-                if '3d' in fmt or any(i.endswith('3d') for i in fmt): info.append('3D')
-                if any(i in ['hevc', 'h265', 'x265'] for i in fmt): info.append('HEVC')
-                if not any(i in ['pt-pt', 'portugu'] for i in fmt): info.append('subbed')
+                quality, info = source_utils.get_release_quality(host_url)
 
                 info = ' | '.join(info)
 
-                sources.append({'source': host, 'quality': quality, 'language': 'pt', 'url': host_url, 'info': info, 'direct': False, 'debridonly': False, 'checkquality': True})
+                sources.append({'source': hoster, 'quality': quality, 'language': 'pt', 'url': host_url, 'info': info, 'direct': False, 'debridonly': False, 'checkquality': True})
 
             return sources
         except:
             return sources
 
-
     def resolve(self, url):
         return url
-                
-
